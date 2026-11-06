@@ -8,10 +8,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import uuid
 
 from app.agent.llm import GeminiLLM, LLMConfigError
 from app.agent.loop import run_agent
+from app.config import settings
 from app.store import InvalidDataset, store
+from app.tracing import Tracer, trace_path
 
 
 def _preview(obj: object, limit: int = 300) -> str:
@@ -40,7 +43,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Loaded {summary['name']}: {summary['n_rows']} rows x {summary['n_columns']} columns | model: {llm.model}\n")
 
     exit_code = 0
-    for event in run_agent(args.question, dataset_id, llm=llm, max_steps=args.max_steps):
+    run_id = f"cli-{uuid.uuid4().hex[:8]}"
+    tracer = Tracer(run_id, trace_path(settings.trace_dir, run_id) if settings.trace_dir else None)
+    for event in run_agent(args.question, dataset_id, llm=llm, max_steps=args.max_steps, tracer=tracer):
         d = event.data
         if event.type == "thinking" and not args.hide_thinking:
             print(f"[step {event.step}] thinking: {d['text'].strip()}\n")
@@ -55,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
             print("=" * 72 + f"\n{label}\n" + "=" * 72 + f"\n{body}\n")
             print(f"steps={d.get('steps')} elapsed={d.get('elapsed_ms')} ms tokens={d.get('usage')}")
             exit_code = 0 if event.type == "answer" else 1
+    if tracer.path:
+        print(f"trace: {tracer.path}")
     return exit_code
 
 

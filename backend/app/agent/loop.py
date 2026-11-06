@@ -30,6 +30,7 @@ from app.ml.models import ModelStore
 from app.ml.models import models as default_models
 from app.tools import ToolContext, ToolError, ToolRegistry
 from app.tools import registry as default_registry
+from app.tracing import Tracer
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ def run_agent(
     models: ModelStore = default_models,
     max_steps: int | None = None,
     cancel: threading.Event | None = None,
+    tracer: Tracer | None = None,
 ) -> Iterator[AgentEvent]:
     """Answer `question` about a stored dataset, yielding AgentEvents along the way.
 
@@ -86,11 +88,54 @@ def run_agent(
 
     `cancel` is checked before every model call and every tool call. An in-flight
     model call can't be interrupted, but its result is discarded once cancel is set.
+
+    `tracer` records the run (model-call latency and tokens, tool calls, outcome).
+    Without one, an in-memory tracer is used, so traces are never optional internally.
     """
-    max_steps = max_steps or settings.max_steps
+    tracer = tracer or Tracer(run_id="adhoc")
+    ended = False
+    try:
+        for event in _steps(question, dataset_id, llm, store, registry, models, max_steps or settings.max_steps, cancel, tracer):
+            d = event.data
+            if event.type == "tool_call":
+                tracer.tool_call(step=event.step, key=d["key"], name=d["name"], args=d["args"])
+            elif event.type == "tool_result":
+                tracer.tool_result(
+                    step=event.step, key=d["key"], name=d["name"], duration_ms=d["duration_ms"],
+                    is_error=d["is_error"], result=d["result"],
+                )
+            elif event.type in TERMINAL_EVENTS:
+                status = {"answer": "done", "error": "error", "cancelled": "cancelled"}[event.type]
+                tracer.end(status=status, steps=event.step, message=str(d.get("message", "")))
+                ended = True
+            yield event
+    finally:
+        if not ended:  # consumer stopped early, or an unexpected exception
+            tracer.end(status="aborted", steps=0)
+
+
+def _steps(
+    question: str,
+    dataset_id: str,
+    llm: LLM,
+    store: DatasetStore,
+    registry: ToolRegistry,
+    models: ModelStore,
+    max_steps: int,
+    cancel: threading.Event | None,
+    tracer: Tracer,
+) -> Iterator[AgentEvent]:
     ctx = ToolContext(df=store.frame(dataset_id), dataset_id=dataset_id, models=models)
-    system = build_system_prompt(store.schema_summary(dataset_id))
+    summary = store.schema_summary(dataset_id)
+    system = build_system_prompt(summary)
     tools = registry.schemas()
+    tracer.start(
+        question=question,
+        dataset={"name": summary["name"], "n_rows": summary["n_rows"], "n_columns": summary["n_columns"]},
+        model=str(getattr(llm, "model", type(llm).__name__)),
+        system_prompt=system,
+        tools=[t["name"] for t in tools],
+    )
     history: list[Any] = [llm.user_message(question)]
     usage: Counter[str] = Counter()
     started = perf_counter()
@@ -108,11 +153,17 @@ def run_agent(
         if cancelled():
             yield cancelled_event(step)
             return
+        t_llm = perf_counter()
         try:
             reply = llm.chat(system=system, history=history, tools=tools)
         except LLMError as e:
+            tracer.llm_call(step=step, duration_ms=(perf_counter() - t_llm) * 1000, usage={}, finish="exception", error=str(e))
             yield AgentEvent(type="error", step=step, data={"message": str(e), **stats(step)})
             return
+        tracer.llm_call(
+            step=step, duration_ms=(perf_counter() - t_llm) * 1000, usage=reply.usage, finish=reply.finish,
+            n_tool_calls=len(reply.tool_calls),
+        )
         usage.update(reply.usage)
         if cancelled():
             yield cancelled_event(step)

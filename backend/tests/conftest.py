@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import os
+
+# Before any app import: tests keep traces in memory (no files in backend/traces).
+os.environ["DATAPILOT_TRACING"] = "0"
+
 import pandas as pd
 import pytest
 

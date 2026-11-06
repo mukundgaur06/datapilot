@@ -19,20 +19,17 @@ from __future__ import annotations
 
 import re
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
-from app.agent.llm import LLM, GeminiLLM, LLMConfigError, LLMRateLimited, LLMReply, LLMUnavailable
+from app.agent.llm import LLM, GeminiLLM, LLMConfigError
 from app.agent.loop import run_agent
+from app.agent.retry import DailyQuotaExhausted, RetryingLLM  # noqa: F401  (re-exported for tests)
 from app.store import DatasetStore
 
 DATA = Path(__file__).resolve().parents[2] / "sample_data"
 NUMBER = re.compile(r"-?\d[\d,]*\.?\d*")
-MAX_RETRIES = 3
-DEFAULT_WAIT_S = 30.0  # used when the 429 doesn't say how long to wait
-UNAVAILABLE_BASE_WAIT_S = 10.0  # first wait after a 503/504; doubles on each retry
 
 
 @dataclass
@@ -65,45 +62,6 @@ CASES = [
         [17],
     ),
 ]
-
-
-class DailyQuotaExhausted(Exception):
-    pass
-
-
-class RetryingLLM:
-    """Wraps an LLM and retries a single chat() call on 429, honouring the server's delay."""
-
-    def __init__(self, inner: LLM, max_retries: int = MAX_RETRIES, sleep: Any = time.sleep) -> None:
-        self.inner = inner
-        self.max_retries = max_retries
-        self.sleep = sleep  # injectable, so this can be tested without real waiting
-
-    def user_message(self, text: str) -> Any:
-        return self.inner.user_message(text)
-
-    def tool_results_message(self, results: list[Any]) -> Any:
-        return self.inner.tool_results_message(results)
-
-    def chat(self, **kwargs: Any) -> LLMReply:
-        for attempt in range(self.max_retries + 1):
-            try:
-                return self.inner.chat(**kwargs)
-            except LLMRateLimited as e:
-                if e.daily:
-                    raise DailyQuotaExhausted(str(e)) from e
-                if attempt == self.max_retries:
-                    raise  # LLMError: the agent loop turns it into an "error" event
-                wait = (e.retry_after or DEFAULT_WAIT_S) + 1
-                reason = "rate limited"
-            except LLMUnavailable:
-                if attempt == self.max_retries:
-                    raise
-                wait = UNAVAILABLE_BASE_WAIT_S * 2**attempt  # exponential backoff: 10s, 20s, 40s
-                reason = "model overloaded"
-            print(f"   ({reason}; waiting {wait:.0f}s, retry {attempt + 1}/{self.max_retries})")
-            self.sleep(wait)
-        raise AssertionError("unreachable")
 
 
 def numbers_in_text(text: str) -> list[float]:

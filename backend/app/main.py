@@ -143,6 +143,16 @@ def get_run(run_id: str) -> RunOut:
     return _run_out(_get_run(run_id))
 
 
+@app.get("/runs/{run_id}/trace")
+def get_trace(run_id: str) -> dict[str, Any]:
+    """The run's trace: model calls (latency, tokens), tool calls, outcome, with timings for a waterfall."""
+    run = _get_run(run_id)
+    tracer = run.tracer
+    if tracer is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No trace for this run.")
+    return {"run_id": run.id, "status": run.status, "records": list(tracer.records), "summary": tracer.summary()}
+
+
 @app.post("/runs/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED, response_model=RunOut)
 def cancel_run(run_id: str) -> RunOut:
     """Ask the agent to stop. It stops at its next checkpoint and emits a 'cancelled' event."""

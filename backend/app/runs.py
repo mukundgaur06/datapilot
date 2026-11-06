@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
+from pathlib import Path
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -23,8 +24,10 @@ from typing import Literal
 
 from app.agent.llm import LLM
 from app.agent.loop import TERMINAL_EVENTS, AgentEvent, run_agent
+from app.config import settings
 from app.store import DatasetStore
 from app.store import store as default_store
+from app.tracing import Tracer, trace_path
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +47,7 @@ class Run:
     status: RunStatus = "running"
     events: list[AgentEvent] = field(default_factory=list)
     cancel: threading.Event = field(default_factory=threading.Event)
+    tracer: Tracer | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     _cond: threading.Condition = field(default_factory=threading.Condition, repr=False)
 
@@ -69,8 +73,9 @@ class Run:
 
 
 class RunManager:
-    def __init__(self, store: DatasetStore = default_store, max_runs: int = 200) -> None:
+    def __init__(self, store: DatasetStore = default_store, max_runs: int = 200, trace_dir: Path | None = None) -> None:
         self.store = store
+        self.trace_dir = trace_dir
         self.max_runs = max_runs
         self._runs: OrderedDict[str, Run] = OrderedDict()
         self._lock = threading.Lock()
@@ -83,6 +88,7 @@ class RunManager:
         """
         self.store.get(dataset_id)
         run = Run(id=uuid.uuid4().hex[:12], dataset_id=dataset_id, question=question)
+        run.tracer = Tracer(run.id, trace_path(self.trace_dir, run.id) if self.trace_dir else None)
         with self._lock:
             self._runs[run.id] = run
             self._evict()
@@ -104,7 +110,7 @@ class RunManager:
 
     def _execute(self, run: Run, llm: LLM) -> None:
         try:
-            for event in run_agent(run.question, run.dataset_id, llm=llm, store=self.store, cancel=run.cancel):
+            for event in run_agent(run.question, run.dataset_id, llm=llm, store=self.store, cancel=run.cancel, tracer=run.tracer):
                 run.append(event)
         except Exception:  # a bug on our side: never leave a run stuck in "running"
             logger.exception("Run %s crashed", run.id)
@@ -112,4 +118,4 @@ class RunManager:
             run.append(AgentEvent(type="error", step=0, data={"message": "Internal error while running the agent."}))
 
 
-runs = RunManager()
+runs = RunManager(trace_dir=settings.trace_dir)
