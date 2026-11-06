@@ -1,0 +1,128 @@
+@import 'tailwindcss';
+
+/* Dark mode follows a `.dark` class on <html> (set by the theme toggle), not only the OS setting. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Colour roles. Chart colours come from the validated data-viz palette:
+   series = blue slot 1; diverging = blue (+) / red (-) around a grey zero line.
+   Dark values are their own steps for the dark surface, not an automatic flip. */
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --surface-2: #f3f2ee;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --ink-muted: #6f6d68;
+  --hairline: rgba(11, 11, 11, 0.1);
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --accent: #2a78d6;
+  --accent-ink: #1c5cab;
+  --series-1: #2a78d6;
+  --diverge-pos: #2a78d6;
+  --diverge-neg: #e34948;
+  --good: #0ca30c;
+  --critical: #d03b3b;
+}
+
+.dark {
+  color-scheme: dark;
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --surface-2: #232321;
+  --ink: #f0efec;
+  --ink-2: #c3c2b7;
+  --ink-muted: #9a988f;
+  --hairline: rgba(255, 255, 255, 0.1);
+  --grid: #2c2c2a;
+  --axis: #383835;
+  --accent: #3987e5;
+  --accent-ink: #86b6ef;
+  --series-1: #3987e5;
+  --diverge-pos: #3987e5;
+  --diverge-neg: #e66767;
+  --good: #0ca30c;
+  --critical: #e66767;
+}
+
+@theme inline {
+  --color-page: var(--page);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-muted: var(--ink-muted);
+  --color-hairline: var(--hairline);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-good: var(--good);
+  --color-critical: var(--critical);
+  --font-sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-page text-ink font-sans antialiased;
+}
+
+/* Shimmer skeleton: animates `transform` only (GPU-composited, no layout reflow). */
+.shimmer {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--ink) 7%, transparent), transparent);
+  animation: shimmer 1.4s infinite;
+}
+@keyframes shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shimmer::after {
+    animation: none;
+  }
+}
+
+/* Markdown answers: just enough typography for paragraphs, lists and emphasis. */
+.markdown > * + * {
+  margin-top: 0.6em;
+}
+.markdown ul,
+.markdown ol {
+  padding-left: 1.25rem;
+}
+.markdown ul {
+  list-style: disc;
+}
+.markdown ol {
+  list-style: decimal;
+}
+.markdown li + li {
+  margin-top: 0.25em;
+}
+.markdown strong {
+  font-weight: 600;
+}
+.markdown code {
+  font-size: 0.875em;
+  padding: 0.1em 0.35em;
+  border-radius: 0.3rem;
+  background: var(--surface-2);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
