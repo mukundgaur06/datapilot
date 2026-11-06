@@ -42,7 +42,7 @@ def test_csv_duplicate_headers_are_renamed_by_pandas() -> None:
 
 def test_schemas_are_flat_json_schema() -> None:
     specs = registry.schemas()
-    assert [s["name"] for s in specs] == ["correlation", "group_aggregate", "profile_dataset"]
+    assert [s["name"] for s in specs] == ["correlation", "feature_importance", "group_aggregate", "make_chart", "predict", "profile_dataset", "train_model"]
     for spec in specs:
         params = spec["parameters"]
         assert params["type"] == "object"

@@ -26,7 +26,9 @@ from app.agent.prompts import build_system_prompt
 from app.config import settings
 from app.store import DatasetStore
 from app.store import store as default_store
-from app.tools import ToolError, ToolRegistry
+from app.ml.models import ModelStore
+from app.ml.models import models as default_models
+from app.tools import ToolContext, ToolError, ToolRegistry
 from app.tools import registry as default_registry
 
 logger = logging.getLogger(__name__)
@@ -42,9 +44,13 @@ class AgentEvent(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
 
 
+UI_ONLY_KEY = "ui"  # tools put display-only data (chart points) here: the browser gets it, the model doesn't
+
+
 def serialize_result(result: dict[str, Any]) -> str:
-    """JSON for the model, capped so one big result can't flood the context window."""
-    text = json.dumps(result, default=str, ensure_ascii=False)
+    """JSON for the model, without display-only data, capped so one big result can't flood the context window."""
+    model_view = {k: v for k, v in result.items() if k != UI_ONLY_KEY}
+    text = json.dumps(model_view, default=str, ensure_ascii=False)
     if len(text) > MAX_RESULT_CHARS:
         text = text[:MAX_RESULT_CHARS] + (
             ' ...[truncated: result too large. Narrow the query, e.g. lower "limit" or add filters]'
@@ -52,9 +58,9 @@ def serialize_result(result: dict[str, Any]) -> str:
     return text
 
 
-def _execute(registry: ToolRegistry, call: ToolCall, df: Any) -> tuple[dict[str, Any], bool]:
+def _execute(registry: ToolRegistry, call: ToolCall, ctx: ToolContext) -> tuple[dict[str, Any], bool]:
     try:
-        return registry.dispatch(call.name, df, call.args), False
+        return registry.dispatch(call.name, ctx, call.args), False
     except ToolError as e:
         return {"error": str(e)}, True
     except Exception:  # a bug in our tool, not the model's fault: log it, don't kill the run
@@ -69,6 +75,7 @@ def run_agent(
     llm: LLM,
     store: DatasetStore = default_store,
     registry: ToolRegistry = default_registry,
+    models: ModelStore = default_models,
     max_steps: int | None = None,
     cancel: threading.Event | None = None,
 ) -> Iterator[AgentEvent]:
@@ -81,7 +88,7 @@ def run_agent(
     model call can't be interrupted, but its result is discarded once cancel is set.
     """
     max_steps = max_steps or settings.max_steps
-    df = store.frame(dataset_id)
+    ctx = ToolContext(df=store.frame(dataset_id), dataset_id=dataset_id, models=models)
     system = build_system_prompt(store.schema_summary(dataset_id))
     tools = registry.schemas()
     history: list[Any] = [llm.user_message(question)]
@@ -144,7 +151,7 @@ def run_agent(
                 type="tool_call", step=step, data={"key": key, "id": call.id, "name": call.name, "args": call.args}
             )
             t0 = perf_counter()
-            result, is_error = _execute(registry, call, df)
+            result, is_error = _execute(registry, call, ctx)
             yield AgentEvent(
                 type="tool_result",
                 step=step,

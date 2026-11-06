@@ -39,7 +39,7 @@ def test_system_prompt_contains_schema_but_tools_compute_numbers(store: DatasetS
     run(llm, store, dataset_id)
     system = llm.calls[0]["system"]
     assert "<dataset_schema>" in system and "Income_k" in system
-    assert {t["name"] for t in llm.calls[0]["tools"]} == {"profile_dataset", "group_aggregate", "correlation"}
+    assert {t["name"] for t in llm.calls[0]["tools"]} == set(["correlation", "feature_importance", "group_aggregate", "make_chart", "predict", "profile_dataset", "train_model"])
 
 
 def test_tool_error_is_fed_back_and_model_recovers(store: DatasetStore, dataset_id: str) -> None:

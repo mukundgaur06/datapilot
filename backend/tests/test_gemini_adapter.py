@@ -50,7 +50,7 @@ def test_request_config_disables_auto_calling_and_declares_tools() -> None:
     assert config.automatic_function_calling.disable is True
     assert config.thinking_config.thinking_level == types.ThinkingLevel.LOW
     names = [d.name for d in config.tools[0].function_declarations]
-    assert names == ["correlation", "group_aggregate", "profile_dataset"]
+    assert names == ["correlation", "feature_importance", "group_aggregate", "make_chart", "predict", "profile_dataset", "train_model"]
 
 
 def test_parses_function_calls_thoughts_and_usage() -> None:

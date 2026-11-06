@@ -15,7 +15,21 @@ from typing import Any, Callable
 import pandas as pd
 from pydantic import BaseModel, ValidationError
 
-ToolFn = Callable[[pd.DataFrame, Any], dict[str, Any]]
+ToolFn = Callable[..., dict[str, Any]]
+
+
+@dataclass
+class ToolContext:
+    """Everything a tool may need beyond its arguments.
+
+    Most tools only need the DataFrame. Stateful tools (the ML ones) opt in with
+    `needs_context=True` and also get the dataset id and the model store, so a model
+    trained on one dataset can never be used on another.
+    """
+
+    df: pd.DataFrame
+    dataset_id: str = ""
+    models: Any = None  # app.ml.models.ModelStore; typed loosely to avoid an import cycle
 
 
 class ToolError(Exception):
@@ -32,6 +46,7 @@ class Tool:
     description: str
     args_model: type[BaseModel]
     fn: ToolFn
+    needs_context: bool = False  # True: fn(ctx, args); False: fn(df, args)
 
 
 def _inline_refs(schema: dict[str, Any]) -> dict[str, Any]:
@@ -66,11 +81,13 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
 
-    def register(self, *, name: str, description: str, args_model: type[BaseModel]) -> Callable[[ToolFn], ToolFn]:
+    def register(
+        self, *, name: str, description: str, args_model: type[BaseModel], needs_context: bool = False
+    ) -> Callable[[ToolFn], ToolFn]:
         def decorator(fn: ToolFn) -> ToolFn:
             if name in self._tools:
                 raise ValueError(f"Tool {name!r} registered twice")
-            self._tools[name] = Tool(name, description, args_model, fn)
+            self._tools[name] = Tool(name, description, args_model, fn, needs_context)
             return fn
 
         return decorator
@@ -90,7 +107,8 @@ class ToolRegistry:
             for t in sorted(self._tools.values(), key=lambda t: t.name)
         ]
 
-    def dispatch(self, name: str, df: pd.DataFrame, raw_args: dict[str, Any] | None) -> dict[str, Any]:
+    def dispatch(self, name: str, target: pd.DataFrame | ToolContext, raw_args: dict[str, Any] | None) -> dict[str, Any]:
+        """Validate arguments and run a tool. `target` is a ToolContext (or, for convenience, a bare DataFrame)."""
         tool = self._tools.get(name)
         if tool is None:
             raise ToolError(f"Unknown tool {name!r}. Available tools: {self.names}")
@@ -98,7 +116,12 @@ class ToolRegistry:
             args = tool.args_model.model_validate(raw_args or {})
         except ValidationError as e:
             raise ToolError(_format_validation_error(e)) from e
-        return tool.fn(df, args)
+        ctx = target if isinstance(target, ToolContext) else ToolContext(df=target)
+        if tool.needs_context:
+            if ctx.models is None:
+                raise ToolError(f"Tool {name!r} is not available in this context.")
+            return tool.fn(ctx, args)
+        return tool.fn(ctx.df, args)
 
 
 registry = ToolRegistry()
