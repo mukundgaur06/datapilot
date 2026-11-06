@@ -13,6 +13,9 @@ export function suggestQuestions(summary: DatasetSummary, max = 4): string[] {
   const out: string[] = []
   const [group] = [...groups].sort(byFewestGroups)
   if (group) out.push(`What share of rows falls in each ${group.name}?`)
+  // A category with a handful of values is a natural thing to predict.
+  const target = [...groups].filter((c) => c.n_unique <= 5).sort(byFewestGroups)[0]
+  if (target && usable.length > 1) out.push(`Build a model to predict ${target.name} and tell me what drives it.`)
   if (group && numbers[0]) out.push(`What is the average ${numbers[0].name} for each ${group.name}?`)
   if (numbers.length >= 2) out.push(`Which columns are most strongly correlated with ${numbers[0].name}?`)
   if (numbers.length >= 2 && !group) {

@@ -15,9 +15,9 @@ describe('suggestQuestions', () => {
     const qs = suggestQuestions(summary([col('Customer_ID', 'id', 100), col('Segment', 'categorical', 4), col('Spend', 'numeric', 80), col('Age', 'numeric', 40)]))
     expect(qs).toEqual([
       'What share of rows falls in each Segment?',
+      'Build a model to predict Segment and tell me what drives it.',
       'What is the average Spend for each Segment?',
       'Which columns are most strongly correlated with Spend?',
-      'Give me an overview of this dataset and any data-quality issues.',
     ])
     expect(qs.join(' ')).not.toContain('Customer_ID')
   })
@@ -38,6 +38,7 @@ describe('format', () => {
   it('formats tool calls on one line, skipping empty args', () => {
     expect(formatToolCall('group_aggregate', { group_by: ['label'], agg: 'count', filters: [], column: null })).toBe('group_aggregate(group_by=label, agg=count)')
     expect(formatToolCall('group_aggregate', { filters: [{ column: 'Age', op: '>', value: 40 }] })).toBe('group_aggregate(where Age > 40)')
+    expect(formatToolCall('predict', { model_id: 'm_1', rows: [{ a: 1 }, { a: 2 }] })).toBe('predict(model_id=m_1, rows=[2 items])')
   })
 })
 

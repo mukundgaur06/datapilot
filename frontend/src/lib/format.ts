@@ -28,6 +28,7 @@ export function formatToolCall(name: string, args: JsonRecord): string {
     .filter(([, v]) => v !== null && v !== undefined && !(Array.isArray(v) && v.length === 0))
     .map(([k, v]) => {
       if (k === 'filters') return `where ${describeFilters(v)}`
+      if (Array.isArray(v) && v.some((x) => typeof x === 'object')) return `${k}=[${v.length} item${v.length === 1 ? '' : 's'}]`
       if (Array.isArray(v)) return `${k}=${v.join(', ')}`
       return `${k}=${String(v)}`
     })

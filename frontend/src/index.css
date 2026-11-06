@@ -4,7 +4,7 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* Colour roles. Chart colours come from the validated data-viz palette:
-   series = blue slot 1; diverging = blue (+) / red (-) around a grey zero line.
+   series = slots 1-3 (validated all-pairs for scatter), Other = neutral grey; diverging = blue (+) / red (-) around a grey zero line.
    Dark values are their own steps for the dark surface, not an automatic flip. */
 :root {
   color-scheme: light;
@@ -20,6 +20,9 @@
   --accent: #2a78d6;
   --accent-ink: #1c5cab;
   --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-other: #898781;
   --diverge-pos: #2a78d6;
   --diverge-neg: #e34948;
   --good: #0ca30c;
@@ -40,6 +43,9 @@
   --accent: #3987e5;
   --accent-ink: #86b6ef;
   --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-other: #898781;
   --diverge-pos: #3987e5;
   --diverge-neg: #e66767;
   --good: #0ca30c;
@@ -115,6 +121,24 @@ body {
 }
 .markdown strong {
   font-weight: 600;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  font-weight: 600;
+  margin-top: 1em;
+}
+.markdown h1,
+.markdown h2 {
+  font-size: 1.05em;
+}
+.markdown h3,
+.markdown h4 {
+  font-size: 1em;
+}
+.markdown > :first-child {
+  margin-top: 0;
 }
 .markdown code {
   font-size: 0.875em;
