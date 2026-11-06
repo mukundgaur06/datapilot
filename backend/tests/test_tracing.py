@@ -63,7 +63,7 @@ def test_trace_endpoint() -> None:
         body = client.get(f"/runs/{run_id}/trace").json()
     finally:
         app.dependency_overrides.clear()
-    assert body["status"] == "done"
+    assert body["status"] == "done" and body["saved"] is False  # tests keep traces in memory
     assert body["summary"]["llm_calls"] == 2 and body["summary"]["tool_calls"] == 1
     assert body["records"][-1]["kind"] == "run_end"
     assert client.get("/runs/missing/trace").status_code == 404

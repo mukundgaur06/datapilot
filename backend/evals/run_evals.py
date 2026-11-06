@@ -2,7 +2,8 @@
 
     python -m evals.run_evals --label baseline                 (from backend/, needs GEMINI_API_KEY)
     python -m evals.run_evals --label baseline --resume        (continue an interrupted run)
-    python -m evals.run_evals --only cust-corr,spam-share      (a subset)
+    python -m evals.run_evals --only cust-corr,spam-share      (specific cases)
+    python -m evals.run_evals --subset quick                   (7 cases: fits a free-tier daily quota)
     python -m evals.run_evals --compare evals/results/A.json evals/results/B.json
 
 Each case's result is appended to evals/results/<label>.jsonl the moment it finishes, so a
@@ -27,7 +28,7 @@ from typing import Any, Callable
 
 from app.agent.llm import LLM, GeminiLLM, LLMConfigError
 from app.agent.loop import run_agent
-from app.agent.prompts import SYSTEM_TEMPLATE
+from app.agent.prompts import LATEST, get_template
 from app.agent.retry import DailyQuotaExhausted, RetryingLLM
 from app.ml.models import ModelStore
 from app.store import DatasetStore
@@ -40,8 +41,12 @@ GOLDEN = HERE / "golden.jsonl"
 RESULTS = HERE / "results"
 
 
-def load_cases(only: list[str] | None = None) -> list[dict[str, Any]]:
+def load_cases(only: list[str] | None = None, subset: str | None = None) -> list[dict[str, Any]]:
     cases = [json.loads(line) for line in GOLDEN.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if subset:
+        cases = [c for c in cases if subset in c.get("tags", [])]
+        if not cases:
+            raise SystemExit(f"No cases tagged {subset!r}")
     if only:
         unknown = set(only) - {c["id"] for c in cases}
         if unknown:
@@ -50,14 +55,17 @@ def load_cases(only: list[str] | None = None) -> list[dict[str, Any]]:
     return cases
 
 
-def run_case(case: dict[str, Any], llm: LLM) -> dict[str, Any]:
+def run_case(case: dict[str, Any], llm: LLM, prompt_version: str = LATEST) -> dict[str, Any]:
     """Run one golden case through the real agent loop and real tools; grade it."""
     store = DatasetStore()
     dataset_id = store.load_csv(dataset_path(case["dataset"]))
     tracer = Tracer(f"eval-{case['id']}")
+    waited_before = getattr(llm, "waited_s", 0.0)
     answer, status, partial, error = "", "error", False, ""
     tools_called, tools_ok, tool_numbers = [], [], []
-    for ev in run_agent(case["question"], dataset_id, llm=llm, store=store, models=ModelStore(), tracer=tracer):
+    for ev in run_agent(
+        case["question"], dataset_id, llm=llm, store=store, models=ModelStore(), tracer=tracer, prompt_version=prompt_version
+    ):
         d = ev.data
         if ev.type == "tool_call":
             tools_called.append(d["name"])
@@ -69,9 +77,12 @@ def run_case(case: dict[str, Any], llm: LLM) -> dict[str, Any]:
         elif ev.type in ("error", "cancelled"):
             status, error = ev.type, str(d.get("message", ""))
     summary = tracer.summary()
+    waited_ms = round((getattr(llm, "waited_s", 0.0) - waited_before) * 1000)
     run = {"answer": answer, "status": status, "partial": partial, "tools_ok": tools_ok, "tool_numbers": tool_numbers}
     return {
         "id": case["id"],
+        "prompt_version": prompt_version,
+        "prompt_sha": prompt_sha(prompt_version),
         "dataset": case["dataset"],
         "question": case["question"],
         **grade(case, run),
@@ -81,7 +92,8 @@ def run_case(case: dict[str, Any], llm: LLM) -> dict[str, Any]:
         "tools_called": tools_called,
         "steps": summary["llm_calls"],
         "tool_errors": summary["tool_errors"],
-        "latency_ms": summary["total_ms"],
+        "latency_ms": max(summary["total_ms"] - waited_ms, 0),  # excludes rate-limit waits (a quota artefact)
+        "rate_limit_wait_ms": waited_ms,
         "llm_ms": summary["llm_ms"],
         "usage": summary["usage"],
     }
@@ -122,6 +134,7 @@ def summarise(records: list[dict[str, Any]], total_cases: int) -> dict[str, Any]
         "avg_tool_errors": round(statistics.mean(r["tool_errors"] for r in records), 2) if n else None,
         "latency_p50_s": round(percentile(lat, 0.5), 2),
         "latency_p95_s": round(percentile(lat, 0.95), 2),
+        "rate_limit_wait_s": round(sum(r.get("rate_limit_wait_ms", 0) for r in records) / 1000, 1),
         "avg_input_tokens": round(statistics.mean(tokens_in)) if n else None,
         "avg_output_tokens": round(statistics.mean(tokens_out)) if n else None,
         "total_tokens": sum(tokens_in) + sum(tokens_out),
@@ -137,7 +150,7 @@ def write_report(label: str, meta: dict[str, Any], records: list[dict[str, Any]]
     lines = [
         f"# Eval report: {label}",
         "",
-        f"- Model: `{meta['model']}` · prompt sha `{meta['prompt_sha']}` · {meta['updated']}",
+        f"- Model: `{meta['model']}` · prompt {meta.get('prompt_version', '?')} (sha `{meta['prompt_sha']}`) · subset: {meta.get('subset', 'all')} · {meta['updated']}",
         f"- Cases: {s['cases_run']} of {s['cases_total']}" + (" (incomplete: resume to finish)" if s["cases_run"] < s["cases_total"] else ""),
         "",
         "| Metric | Value |",
@@ -149,7 +162,8 @@ def write_report(label: str, meta: dict[str, Any], records: list[dict[str, Any]]
         f"| ...of which grounded in a tool result | {s['grounded_pct']}% |",
         f"| Avg model calls (steps) per run | {s['avg_steps']} |",
         f"| Avg tool errors per run | {s['avg_tool_errors']} |",
-        f"| Latency p50 / p95 | {s['latency_p50_s']}s / {s['latency_p95_s']}s |",
+        f"| Latency p50 / p95 (excl. rate-limit waits) | {s['latency_p50_s']}s / {s['latency_p95_s']}s |",
+        f"| Time spent waiting on rate limits (not counted above) | {s['rate_limit_wait_s']}s |",
         f"| Avg tokens per run (in / out) | {s['avg_input_tokens']} / {s['avg_output_tokens']} |",
         f"| Total tokens | {s['total_tokens']:,} |",
         "",
@@ -192,16 +206,17 @@ def compare(a_path: Path, b_path: Path) -> str:
 # ---------------------------------------------------------------- main
 
 
-def prompt_sha() -> str:
+def prompt_sha(version: str = LATEST) -> str:
     import hashlib
 
-    return hashlib.sha256(SYSTEM_TEMPLATE.encode()).hexdigest()[:12]
+    return hashlib.sha256(get_template(version).encode()).hexdigest()[:12]
 
 
 def run(label: str, llm: LLM, model_name: str, only: list[str] | None, resume: bool, limit: int | None,
-        pause_s: float = 0.0, log: Callable[[str], Any] = print) -> int:
+        pause_s: float = 0.0, log: Callable[[str], Any] = print, subset: str | None = None,
+        prompt_version: str = LATEST) -> int:
     RESULTS.mkdir(parents=True, exist_ok=True)
-    cases = load_cases(only)
+    cases = load_cases(only, subset)
     log_path = RESULTS / f"{label}.jsonl"
     done: dict[str, dict[str, Any]] = {}
     if log_path.exists():
@@ -209,8 +224,17 @@ def run(label: str, llm: LLM, model_name: str, only: list[str] | None, resume: b
             raise SystemExit(f"{log_path} exists. Pass --resume to continue it, or use a new --label.")
         for line in log_path.read_text(encoding="utf-8").splitlines():
             rec = json.loads(line)
-            if rec.get("status") != "quota":  # finished cases are kept; quota-aborted ones are retried
-                done[rec["id"]] = rec
+            done[rec["id"]] = rec
+        # Never mix prompts within one run: that would make the comparison meaningless.
+        summary_path = RESULTS / f"{label}.json"
+        earlier = {r.get("prompt_sha") for r in done.values() if r.get("prompt_sha")}
+        if not earlier and summary_path.exists():
+            earlier = {json.loads(summary_path.read_text(encoding="utf-8")).get("prompt_sha")}
+        if earlier and earlier != {prompt_sha(prompt_version)}:
+            raise SystemExit(
+                f"Run {label!r} was started with a different prompt (sha {sorted(earlier)}); this one is "
+                f"{prompt_version} ({prompt_sha(prompt_version)}). Use the original --prompt-version, or a new --label."
+            )
     todo = [c for c in cases if c["id"] not in done][: limit or None]
     log(f"{len(done)} cases already done, running {len(todo)} with {model_name}")
 
@@ -218,9 +242,14 @@ def run(label: str, llm: LLM, model_name: str, only: list[str] | None, resume: b
     with log_path.open("a", encoding="utf-8") as f:
         for i, case in enumerate(todo, 1):
             try:
-                rec = run_case(case, llm)
+                rec = run_case(case, llm, prompt_version)
             except DailyQuotaExhausted as e:
-                log(f"[quota] {e}\nStopped. Resume later with: python -m evals.run_evals --label {label} --resume")
+                resume_cmd = " ".join(
+                    ["python -m evals.run_evals", f"--label {label}", "--resume", f"--model {model_name}", f"--prompt-version {prompt_version}"]
+                    + ([f"--subset {subset}"] if subset else [])
+                    + ([f"--only {','.join(only)}"] if only else [])
+                )
+                log(f"[quota] {e}\nStopped. Resume later (same model, prompt and cases) with:\n  {resume_cmd}")
                 stopped = True
                 break
             done[case["id"]] = rec
@@ -231,10 +260,22 @@ def run(label: str, llm: LLM, model_name: str, only: list[str] | None, resume: b
                 time.sleep(pause_s)  # stay under requests-per-minute limits
 
     records = [done[c["id"]] for c in cases if c["id"] in done]
-    meta = {"model": model_name, "prompt_sha": prompt_sha(), "updated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}
+    meta = {"model": model_name, "prompt_version": prompt_version, "prompt_sha": prompt_sha(prompt_version), "subset": subset or "all", "updated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}
     md, js = write_report(label, meta, records, len(cases))
     log(f"report: {md}\nsummary: {js}")
     return 2 if stopped else 0
+
+
+def report_only(label: str, subset: str | None) -> int:
+    records = [json.loads(line) for line in (RESULTS / f"{label}.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    meta = json.loads((RESULTS / f"{label}.json").read_text(encoding="utf-8"))
+    cases = load_cases(None, subset)
+    by_id = {r["id"]: r for r in records}
+    ordered = [by_id[c["id"]] for c in cases if c["id"] in by_id]
+    keep = {k: meta[k] for k in ("model", "prompt_version", "prompt_sha", "subset", "updated") if k in meta}
+    md, js = write_report(label, keep, ordered, len(cases))
+    print(f"report: {md}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -243,9 +284,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--label", help="Name for this run (results/<label>.*). Default: <date>-<model>.")
     p.add_argument("--model", help="Override DATAPILOT_MODEL")
     p.add_argument("--only", help="Comma-separated case ids")
+    p.add_argument("--prompt-version", default=LATEST, help=f"System prompt version to evaluate (default: {LATEST})")
+    p.add_argument("--subset", help="Only cases with this tag, e.g. 'quick' (fits a free-tier daily quota)")
     p.add_argument("--limit", type=int, help="Run at most N not-yet-done cases")
     p.add_argument("--resume", action="store_true", help="Continue an existing run with the same label")
     p.add_argument("--pause", type=float, default=0.0, help="Seconds to wait between cases (rate limits)")
+    p.add_argument("--report-only", action="store_true", help="Rebuild the report from saved results; no model calls")
     p.add_argument("--compare", nargs=2, metavar=("A_JSON", "B_JSON"), help="Compare two run summaries")
     args = p.parse_args(argv)
 
@@ -253,6 +297,10 @@ def main(argv: list[str] | None = None) -> int:
         table = compare(Path(args.compare[0]), Path(args.compare[1]))
         print(table)
         return 0
+    if args.report_only:
+        if not args.label:
+            raise SystemExit("--report-only needs --label")
+        return report_only(args.label, args.subset)
     try:
         gemini = GeminiLLM(model=args.model)
     except LLMConfigError as e:
@@ -260,7 +308,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     label = args.label or f"{datetime.now(timezone.utc):%Y-%m-%d}-{gemini.model}"
     only = [s.strip() for s in args.only.split(",")] if args.only else None
-    return run(label, RetryingLLM(gemini), gemini.model, only, args.resume, args.limit, args.pause)
+    get_template(args.prompt_version)  # fail fast on a typo
+    return run(
+        label, RetryingLLM(gemini), gemini.model, only, args.resume, args.limit, args.pause,
+        subset=args.subset, prompt_version=args.prompt_version,
+    )
 
 
 if __name__ == "__main__":

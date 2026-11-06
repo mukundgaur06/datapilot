@@ -82,3 +82,27 @@ export function streamRun(runId: string, handlers: StreamHandlers): () => void {
   }
   return () => source.close()
 }
+
+export interface TraceRecord {
+  t_ms: number
+  kind: 'run_start' | 'llm_call' | 'tool_call' | 'tool_result' | 'run_end'
+  [key: string]: unknown
+}
+
+export interface Trace {
+  run_id: string
+  saved: boolean
+  status: RunStatus
+  records: TraceRecord[]
+  summary: {
+    llm_calls: number
+    llm_ms: number
+    tool_calls: number
+    tool_errors: number
+    tool_ms: number
+    total_ms: number
+    usage: Record<string, number>
+  }
+}
+
+export const getTrace = (runId: string) => request<Trace>(`/runs/${runId}/trace`)

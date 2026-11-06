@@ -7,6 +7,7 @@ import { CommandPalette } from './components/CommandPalette'
 import { AlertIcon, MoonIcon, SunIcon } from './components/Icons'
 import { SchemaPanel } from './components/SchemaPanel'
 import { Timeline } from './components/Timeline'
+import { TracePanel } from './components/TracePanel'
 import { UploadDropzone } from './components/UploadDropzone'
 import { useAgentRuns } from './hooks/useAgentRuns'
 import { useTheme } from './hooks/useTheme'
@@ -36,6 +37,7 @@ export default function App() {
   const [prompt, setPrompt] = useState('')
   const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [sideTab, setSideTab] = useState<'artifacts' | 'trace'>('artifacts')
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -120,6 +122,11 @@ export default function App() {
   }, [runs])
   const artifactIds = useMemo(() => new Set(artifacts.map((a) => a.id)), [artifacts])
 
+  const showArtifact = useCallback((id: string) => {
+    setSideTab('artifacts')
+    setSelectedArtifact(id)
+  }, [])
+
   const suggestions = useMemo(() => (dataset ? suggestQuestions(dataset.summary) : []), [dataset])
 
   const commands: Command[] = useMemo(
@@ -201,7 +208,7 @@ export default function App() {
                       </p>
                     </div>
                   ) : (
-                    <Timeline runs={runs} artifactIds={artifactIds} selectedArtifact={selectedArtifact} onSelectArtifact={setSelectedArtifact} />
+                    <Timeline runs={runs} artifactIds={artifactIds} selectedArtifact={selectedArtifact} onSelectArtifact={showArtifact} />
                   )}
                   <div ref={timelineEnd} />
                 </div>
@@ -223,9 +230,26 @@ export default function App() {
               </div>
             </main>
 
-            <aside className="max-h-[40vh] min-h-0 overflow-y-auto border-t border-hairline bg-page p-4 lg:max-h-none lg:border-t-0 lg:border-l" aria-label="Artifacts panel">
-              <h2 className="mb-3 text-sm font-semibold">Artifacts</h2>
-              <ArtifactsPanel artifacts={artifacts} selected={selectedArtifact} />
+            <aside className="max-h-[40vh] min-h-0 overflow-y-auto border-t border-hairline bg-page p-4 lg:max-h-none lg:border-t-0 lg:border-l" aria-label="Results">
+              <div role="tablist" aria-label="Results view" className="mb-3 flex gap-1 rounded-lg border border-hairline bg-surface p-0.5 text-sm">
+                {(['artifacts', 'trace'] as const).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    role="tab"
+                    id={`tab-${t}`}
+                    aria-selected={sideTab === t}
+                    aria-controls={`panel-${t}`}
+                    onClick={() => setSideTab(t)}
+                    className={`flex-1 rounded-md px-2 py-1 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-accent ${sideTab === t ? 'bg-surface-2 text-ink' : 'text-ink-muted hover:text-ink'}`}
+                  >
+                    {t === 'artifacts' ? `Artifacts${artifacts.length ? ` (${artifacts.length})` : ''}` : 'Trace'}
+                  </button>
+                ))}
+              </div>
+              <div role="tabpanel" id={`panel-${sideTab}`} aria-labelledby={`tab-${sideTab}`}>
+                {sideTab === 'artifacts' ? <ArtifactsPanel artifacts={artifacts} selected={selectedArtifact} /> : <TracePanel runs={runs} />}
+              </div>
             </aside>
           </div>
         )}

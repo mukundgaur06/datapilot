@@ -94,7 +94,7 @@ def test_harness_runs_grades_stops_on_quota_and_resumes(tmp_path: Path, monkeypa
     monkeypatch.setattr(run_evals, "RESULTS", tmp_path)
     logs: list[str] = []
     code = run_evals.run("t1", QuotaAfter(), "scripted", ["cust-oldest", "iris-max"], resume=False, limit=None, log=logs.append)
-    assert code == 2 and any("Resume later" in line for line in logs)
+    assert code == 2 and any("--resume --model scripted --prompt-version v2 --only cust-oldest,iris-max" in line for line in logs)
 
     records = [json.loads(line) for line in (tmp_path / "t1.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [r["id"] for r in records] == ["iris-max"] and records[0]["pass"] is True  # golden-file order
@@ -123,3 +123,24 @@ def test_compare_table(tmp_path: Path) -> None:
     table = run_evals.compare(tmp_path / "a.json", tmp_path / "b.json")
     assert "| Task success % | 70.0 | 90.0 | +20.00 |" in table
     assert "| Check pass: number % | 80.0 | 95.0 | +15.0 |" in table
+
+
+def test_resume_refuses_a_different_prompt_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(run_evals, "RESULTS", tmp_path)
+    llm = ScriptedLLM([call("group_aggregate", agg="max", column="sepal_length_cm"), answer("7.9")])
+    run_evals.run("pv", llm, "scripted", ["iris-max"], resume=False, limit=None, log=lambda _: None, prompt_version="v1")
+    rec = json.loads((tmp_path / "pv.jsonl").read_text(encoding="utf-8"))
+    assert rec["prompt_version"] == "v1" and rec["prompt_sha"] == run_evals.prompt_sha("v1")
+    with pytest.raises(SystemExit, match="different prompt"):
+        run_evals.run("pv", ScriptedLLM([]), "scripted", ["iris-max", "cust-oldest"], resume=True, limit=None, log=lambda _: None, prompt_version="v2")
+
+
+def test_prompt_versions() -> None:
+    from app.agent.prompts import LATEST, PROMPTS, build_system_prompt
+
+    assert LATEST == "v2" and set(PROMPTS) == {"v1", "v2"}
+    v1, v2 = (build_system_prompt({"name": "d"}, v) for v in ("v1", "v2"))
+    assert "shown to the user as charts automatically" in v2 and "automatically" not in v1
+    assert "Answer the question that was asked" in v2
+    with pytest.raises(ValueError, match="Unknown prompt version"):
+        build_system_prompt({}, "v9")

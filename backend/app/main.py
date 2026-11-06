@@ -150,7 +150,10 @@ def get_trace(run_id: str) -> dict[str, Any]:
     tracer = run.tracer
     if tracer is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No trace for this run.")
-    return {"run_id": run.id, "status": run.status, "records": list(tracer.records), "summary": tracer.summary()}
+    return {
+        "run_id": run.id, "status": run.status, "saved": tracer.path is not None,
+        "records": list(tracer.records), "summary": tracer.summary(),
+    }
 
 
 @app.post("/runs/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED, response_model=RunOut)

@@ -86,6 +86,11 @@ CASES = [
 ]
 
 
+# A cheap subset (~15-18 model requests) that fits one day of a free-tier quota. Chosen to
+# probe likely weak spots: fractions vs %, typo'd columns, abstaining, injection, text filters.
+QUICK = {"iris-corr", "spam-free", "cust-discount-young", "cust-high-score", "cust-lowercase", "cust-unanswerable", "inject-rating"}
+
+
 def build() -> list[dict]:
     out = []
     for case_id, dataset, question, checks in CASES:
@@ -96,7 +101,8 @@ def build() -> list[dict]:
                 value = float(eval(c["expr"], {"df": df, "pd": pd}))  # noqa: S307  trusted, repo-authored expressions
                 c = {**c, "value": round(value, 4)}
             resolved.append(c)
-        out.append({"id": case_id, "dataset": dataset, "question": question, "checks": resolved})
+        tags = ["quick"] if case_id in QUICK else []
+        out.append({"id": case_id, "dataset": dataset, "question": question, "checks": resolved, "tags": tags})
     return out
 
 

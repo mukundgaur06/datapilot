@@ -33,6 +33,7 @@ class RetryingLLM:
         self.max_retries = max_retries
         self.sleep = sleep  # injectable, so this can be tested without real waiting
         self.log = log
+        self.waited_s = 0.0  # total time spent waiting on rate limits / overload, so reports can exclude it
 
     @property
     def model(self) -> str:
@@ -62,4 +63,5 @@ class RetryingLLM:
                 reason = "model overloaded"
             self.log(f"   ({reason}; waiting {wait:.0f}s, retry {attempt + 1}/{self.max_retries})")
             self.sleep(wait)
+            self.waited_s += wait
         raise AssertionError("unreachable")

@@ -62,3 +62,9 @@ def test_overloaded_model_backs_off_exponentially_then_succeeds() -> None:
     llm, waits = retrying([LLMUnavailable("503"), LLMUnavailable("504"), answer("ok")])
     assert llm.chat(system="", history=[], tools=[]).text == "ok"
     assert waits == [10, 20]
+
+
+def test_retrying_llm_tracks_time_spent_waiting() -> None:
+    llm, _ = retrying([LLMRateLimited("429", retry_after=12), LLMUnavailable("503"), answer("ok")])
+    llm.chat(system="", history=[], tools=[])
+    assert llm.waited_s == 13 + 20  # 12+1 for the 429, then the second retry's 10*2 backoff

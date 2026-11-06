@@ -80,6 +80,7 @@ def run_agent(
     max_steps: int | None = None,
     cancel: threading.Event | None = None,
     tracer: Tracer | None = None,
+    prompt_version: str | None = None,
 ) -> Iterator[AgentEvent]:
     """Answer `question` about a stored dataset, yielding AgentEvents along the way.
 
@@ -95,7 +96,8 @@ def run_agent(
     tracer = tracer or Tracer(run_id="adhoc")
     ended = False
     try:
-        for event in _steps(question, dataset_id, llm, store, registry, models, max_steps or settings.max_steps, cancel, tracer):
+        version = prompt_version or settings.prompt_version
+        for event in _steps(question, dataset_id, llm, store, registry, models, max_steps or settings.max_steps, cancel, tracer, version):
             d = event.data
             if event.type == "tool_call":
                 tracer.tool_call(step=event.step, key=d["key"], name=d["name"], args=d["args"])
@@ -124,10 +126,11 @@ def _steps(
     max_steps: int,
     cancel: threading.Event | None,
     tracer: Tracer,
+    prompt_version: str | None,
 ) -> Iterator[AgentEvent]:
     ctx = ToolContext(df=store.frame(dataset_id), dataset_id=dataset_id, models=models)
     summary = store.schema_summary(dataset_id)
-    system = build_system_prompt(summary)
+    system = build_system_prompt(summary, prompt_version)
     tools = registry.schemas()
     tracer.start(
         question=question,

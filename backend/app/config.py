@@ -25,6 +25,7 @@ class Settings:
     max_upload_mb: int
     cors_origins: tuple[str, ...]
     trace_dir: Path | None  # None = traces kept in memory only
+    prompt_version: str | None  # None = latest; pin one (e.g. "v1") for A/B evals
 
 
 def _load() -> Settings:
@@ -36,6 +37,7 @@ def _load() -> Settings:
         max_steps=int(os.getenv("DATAPILOT_MAX_STEPS", "8")),
         max_upload_mb=int(os.getenv("DATAPILOT_MAX_UPLOAD_MB", "10")),
         cors_origins=tuple(o.strip() for o in origins.split(",") if o.strip()),
+        prompt_version=os.getenv("DATAPILOT_PROMPT_VERSION") or None,
         trace_dir=None
         if os.getenv("DATAPILOT_TRACING", "1") == "0"
         else Path(os.getenv("DATAPILOT_TRACE_DIR") or BACKEND_DIR / "traces"),
