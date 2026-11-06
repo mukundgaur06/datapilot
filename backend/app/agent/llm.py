@@ -57,6 +57,35 @@ class LLMConfigError(LLMError):
     """The adapter can't be built (e.g. missing API key)."""
 
 
+class LLMRateLimited(LLMError):
+    """HTTP 429. `retry_after` is the provider's suggested wait in seconds (if given);
+    `daily` means a per-day quota is exhausted, so retrying today won't help."""
+
+    def __init__(self, message: str, retry_after: float | None = None, daily: bool = False) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+        self.daily = daily
+
+
+def _rate_limit_info(details: Any) -> tuple[float | None, bool]:
+    """Read Google's RetryInfo.retryDelay ("33s") and QuotaFailure ids from a 429 body."""
+    retry_after, daily = None, False
+    error = details.get("error", {}) if isinstance(details, dict) else {}
+    for d in error.get("details", []) or []:
+        if not isinstance(d, dict):
+            continue
+        delay = d.get("retryDelay")
+        if isinstance(delay, str) and delay.endswith("s"):
+            try:
+                retry_after = float(delay[:-1])
+            except ValueError:
+                pass
+        for v in d.get("violations", []) or []:
+            if isinstance(v, dict) and "PerDay" in str(v.get("quotaId", "")):
+                daily = True
+    return retry_after, daily
+
+
 class LLM(Protocol):
     def user_message(self, text: str) -> Any: ...
     def tool_results_message(self, results: list[ToolResult]) -> Any: ...
@@ -132,7 +161,11 @@ class GeminiLLM:
             )
         except genai_errors.ClientError as e:
             if e.code == 429:
-                raise LLMError("Gemini rate limit / free-tier quota reached. Wait a minute and retry.") from e
+                retry_after, daily = _rate_limit_info(e.details)
+                hint = "Daily quota used up; try again tomorrow." if daily else "Wait a minute and retry."
+                raise LLMRateLimited(
+                    f"Gemini rate limit / free-tier quota reached. {hint}", retry_after=retry_after, daily=daily
+                ) from e
             if e.code in (401, 403):
                 raise LLMError("Gemini rejected the API key. Check GEMINI_API_KEY in backend/.env.") from e
             if e.code == 404:

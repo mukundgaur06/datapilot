@@ -8,9 +8,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+from google.genai import errors as genai_errors
 from google.genai import types
 
-from app.agent.llm import GeminiLLM, ToolCall, ToolResult
+from app.agent.llm import GeminiLLM, LLMError, LLMRateLimited, ToolCall, ToolResult
 from app.tools import registry
 
 
@@ -85,3 +87,40 @@ def test_tool_results_message_uses_output_and_error_keys() -> None:
     assert msg.parts[0].function_response.id == "a"
     assert msg.parts[0].function_response.response == {"output": '{"n_rows": 3}'}
     assert msg.parts[1].function_response.response == {"error": '{"error": "nope"}'}
+
+
+# ---------------------------------------------------------------- rate limits
+
+
+def _raising_llm(exc: Exception) -> GeminiLLM:
+    def generate_content(**kwargs: Any) -> None:
+        raise exc
+
+    return GeminiLLM(model="m", thinking_level="low", client=SimpleNamespace(models=SimpleNamespace(generate_content=generate_content)))
+
+
+def _429(quota_id: str, delay: str | None = "33s") -> genai_errors.ClientError:
+    details: list[dict[str, Any]] = [
+        {"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [{"quotaId": quota_id}]}
+    ]
+    if delay:
+        details.append({"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": delay})
+    body = {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED", "details": details}}
+    return genai_errors.ClientError(429, body)
+
+
+def test_429_per_minute_raises_rate_limited_with_retry_delay() -> None:
+    llm = _raising_llm(_429("GenerateRequestsPerMinutePerProjectPerModel-FreeTier"))
+    with pytest.raises(LLMRateLimited) as info:
+        llm.chat(system="", history=[], tools=[])
+    assert info.value.retry_after == 33.0
+    assert info.value.daily is False
+    assert isinstance(info.value, LLMError)  # existing `except LLMError` handlers still catch it
+
+
+def test_429_per_day_is_flagged_daily_and_tolerates_missing_delay() -> None:
+    llm = _raising_llm(_429("GenerateRequestsPerDayPerProjectPerModel-FreeTier", delay=None))
+    with pytest.raises(LLMRateLimited) as info:
+        llm.chat(system="", history=[], tools=[])
+    assert info.value.daily is True
+    assert info.value.retry_after is None
