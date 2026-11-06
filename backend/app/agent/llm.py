@@ -67,6 +67,10 @@ class LLMRateLimited(LLMError):
         self.daily = daily
 
 
+class LLMUnavailable(LLMError):
+    """HTTP 5xx (e.g. 503 overloaded, 504 deadline exceeded). Transient: safe to retry later."""
+
+
 def _rate_limit_info(details: Any) -> tuple[float | None, bool]:
     """Read Google's RetryInfo.retryDelay ("33s") and QuotaFailure ids from a 429 body."""
     retry_after, daily = None, False
@@ -172,7 +176,7 @@ class GeminiLLM:
                 raise LLMError(f"Model {self.model!r} not found. Set DATAPILOT_MODEL to a current model.") from e
             raise LLMError(f"Gemini request error ({e.code}): {e.message}") from e
         except genai_errors.ServerError as e:
-            raise LLMError(f"Gemini server error ({e.code}). Try again shortly.") from e
+            raise LLMUnavailable(f"Gemini server error ({e.code}): the model is overloaded or timed out. Try again shortly.") from e
         return self._parse(response)
 
     def _parse(self, response: types.GenerateContentResponse) -> LLMReply:

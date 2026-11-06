@@ -28,6 +28,7 @@ Answer format (markdown):
 1. The direct answer in one or two sentences.
 2. A few bullet points with the supporting figures.
 3. A one-line caveat if relevant (small sample, missing values, weak correlation).
+Write numbers and formulas as plain text (r = 0.77, not $r = 0.77$). Never use LaTeX.
 
 <dataset_schema>
 {schema}

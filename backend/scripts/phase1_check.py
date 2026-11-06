@@ -9,9 +9,10 @@ For each question we check two things:
 Expected values were computed directly with pandas on the sample CSVs.
 This is the seed of the Phase 4 golden-set evals.
 
-Free-tier rate limits: a 429 is retried per *LLM call* (not per question), so the
-agent's progress isn't thrown away, and we wait as long as Google says to. If the
-daily quota is exhausted, retrying is pointless, so the run stops immediately.
+Transient errors are retried per *LLM call* (not per question), so the agent's
+progress isn't thrown away: a 429 waits as long as Google says to, and a 503/504
+(model overloaded) backs off exponentially. If the daily quota is exhausted,
+retrying is pointless, so the run stops immediately.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
-from app.agent.llm import LLM, GeminiLLM, LLMConfigError, LLMRateLimited, LLMReply
+from app.agent.llm import LLM, GeminiLLM, LLMConfigError, LLMRateLimited, LLMReply, LLMUnavailable
 from app.agent.loop import run_agent
 from app.store import DatasetStore
 
@@ -31,6 +32,7 @@ DATA = Path(__file__).resolve().parents[2] / "sample_data"
 NUMBER = re.compile(r"-?\d[\d,]*\.?\d*")
 MAX_RETRIES = 3
 DEFAULT_WAIT_S = 30.0  # used when the 429 doesn't say how long to wait
+UNAVAILABLE_BASE_WAIT_S = 10.0  # first wait after a 503/504; doubles on each retry
 
 
 @dataclass
@@ -93,8 +95,14 @@ class RetryingLLM:
                 if attempt == self.max_retries:
                     raise  # LLMError: the agent loop turns it into an "error" event
                 wait = (e.retry_after or DEFAULT_WAIT_S) + 1
-                print(f"   (rate limited; waiting {wait:.0f}s, retry {attempt + 1}/{self.max_retries})")
-                self.sleep(wait)
+                reason = "rate limited"
+            except LLMUnavailable:
+                if attempt == self.max_retries:
+                    raise
+                wait = UNAVAILABLE_BASE_WAIT_S * 2**attempt  # exponential backoff: 10s, 20s, 40s
+                reason = "model overloaded"
+            print(f"   ({reason}; waiting {wait:.0f}s, retry {attempt + 1}/{self.max_retries})")
+            self.sleep(wait)
         raise AssertionError("unreachable")
 
 

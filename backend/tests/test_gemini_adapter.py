@@ -12,7 +12,7 @@ import pytest
 from google.genai import errors as genai_errors
 from google.genai import types
 
-from app.agent.llm import GeminiLLM, LLMError, LLMRateLimited, ToolCall, ToolResult
+from app.agent.llm import GeminiLLM, LLMError, LLMRateLimited, LLMUnavailable, ToolCall, ToolResult
 from app.tools import registry
 
 
@@ -124,3 +124,9 @@ def test_429_per_day_is_flagged_daily_and_tolerates_missing_delay() -> None:
         llm.chat(system="", history=[], tools=[])
     assert info.value.daily is True
     assert info.value.retry_after is None
+
+
+def test_5xx_raises_retryable_unavailable() -> None:
+    body = {"error": {"code": 503, "message": "high demand", "status": "UNAVAILABLE"}}
+    with pytest.raises(LLMUnavailable):
+        _raising_llm(genai_errors.ServerError(503, body)).chat(system="", history=[], tools=[])

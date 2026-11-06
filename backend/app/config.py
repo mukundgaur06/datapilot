@@ -30,7 +30,7 @@ def _load() -> Settings:
     origins = os.getenv("DATAPILOT_CORS_ORIGINS", "http://localhost:5173")
     return Settings(
         gemini_api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or None,
-        model=os.getenv("DATAPILOT_MODEL", "gemini-3.6-flash"),
+        model=os.getenv("DATAPILOT_MODEL", "gemini-3.5-flash-lite"),
         thinking_level=os.getenv("DATAPILOT_THINKING_LEVEL", "LOW").upper(),
         max_steps=int(os.getenv("DATAPILOT_MAX_STEPS", "8")),
         max_upload_mb=int(os.getenv("DATAPILOT_MAX_UPLOAD_MB", "10")),

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.agent.llm import LLMRateLimited, LLMReply
+from app.agent.llm import LLMRateLimited, LLMReply, LLMUnavailable
 from scripts.phase1_check import CASES, DailyQuotaExhausted, RetryingLLM, run_case
 from tests.fakes import ScriptedLLM, call
 
@@ -56,3 +56,9 @@ def test_failed_run_reports_only_the_failure(capsys: pytest.CaptureFixture[str])
     out = capsys.readouterr().out
     assert "run failed: Gemini rate limit" in out
     assert "missing" not in out and "ungrounded" not in out
+
+
+def test_overloaded_model_backs_off_exponentially_then_succeeds() -> None:
+    llm, waits = retrying([LLMUnavailable("503"), LLMUnavailable("504"), answer("ok")])
+    assert llm.chat(system="", history=[], tools=[]).text == "ok"
+    assert waits == [10, 20]
