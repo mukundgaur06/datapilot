@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections import Counter
 from time import perf_counter
 from typing import Any, Iterator, Literal
@@ -31,7 +32,8 @@ from app.tools import registry as default_registry
 logger = logging.getLogger(__name__)
 
 MAX_RESULT_CHARS = 6000
-EventType = Literal["thinking", "tool_call", "tool_result", "answer", "error"]
+EventType = Literal["thinking", "tool_call", "tool_result", "answer", "error", "cancelled"]
+TERMINAL_EVENTS: frozenset[str] = frozenset({"answer", "error", "cancelled"})
 
 
 class AgentEvent(BaseModel):
@@ -68,10 +70,15 @@ def run_agent(
     store: DatasetStore = default_store,
     registry: ToolRegistry = default_registry,
     max_steps: int | None = None,
+    cancel: threading.Event | None = None,
 ) -> Iterator[AgentEvent]:
     """Answer `question` about a stored dataset, yielding AgentEvents along the way.
 
     Raises DatasetNotFound before yielding anything if the dataset id is unknown.
+    The last event is always terminal: answer, error, or cancelled.
+
+    `cancel` is checked before every model call and every tool call. An in-flight
+    model call can't be interrupted, but its result is discarded once cancel is set.
     """
     max_steps = max_steps or settings.max_steps
     df = store.frame(dataset_id)
@@ -84,13 +91,25 @@ def run_agent(
     def stats(step: int) -> dict[str, Any]:
         return {"steps": step, "usage": dict(usage), "elapsed_ms": round((perf_counter() - started) * 1000)}
 
+    def cancelled() -> bool:
+        return cancel is not None and cancel.is_set()
+
+    def cancelled_event(step: int) -> AgentEvent:
+        return AgentEvent(type="cancelled", step=step, data={"message": "Run stopped by the user.", **stats(step)})
+
     for step in range(1, max_steps + 1):
+        if cancelled():
+            yield cancelled_event(step)
+            return
         try:
             reply = llm.chat(system=system, history=history, tools=tools)
         except LLMError as e:
             yield AgentEvent(type="error", step=step, data={"message": str(e), **stats(step)})
             return
         usage.update(reply.usage)
+        if cancelled():
+            yield cancelled_event(step)
+            return
         for thought in reply.thoughts:
             yield AgentEvent(type="thinking", step=step, data={"text": thought})
         if reply.raw_content is not None:
@@ -116,14 +135,21 @@ def run_agent(
             return
 
         results: list[ToolResult] = []
-        for call in reply.tool_calls:
-            yield AgentEvent(type="tool_call", step=step, data={"id": call.id, "name": call.name, "args": call.args})
+        for i, call in enumerate(reply.tool_calls):
+            if cancelled():
+                yield cancelled_event(step)
+                return
+            key = f"{step}.{i}"  # stable pairing of call <-> result for the UI (provider ids may be missing)
+            yield AgentEvent(
+                type="tool_call", step=step, data={"key": key, "id": call.id, "name": call.name, "args": call.args}
+            )
             t0 = perf_counter()
             result, is_error = _execute(registry, call, df)
             yield AgentEvent(
                 type="tool_result",
                 step=step,
                 data={
+                    "key": key,
                     "id": call.id,
                     "name": call.name,
                     "result": result,
