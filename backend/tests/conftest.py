@@ -4,6 +4,9 @@ import os
 
 # Before any app import: tests keep traces in memory (no files in backend/traces).
 os.environ["DATAPILOT_TRACING"] = "0"
+# Rate limits off by default in tests (each test uploads freely); tests/test_guardrails.py turns them on.
+os.environ["DATAPILOT_RATE_LIMIT_RUNS"] = "0"
+os.environ["DATAPILOT_RATE_LIMIT_UPLOADS"] = "0"
 
 import pandas as pd
 import pytest

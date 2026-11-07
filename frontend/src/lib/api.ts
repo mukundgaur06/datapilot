@@ -2,7 +2,11 @@
 
 import { AGENT_EVENT_TYPES, type AgentEvent, type Dataset, type Health, type RunStatus } from './types'
 
-export const API_URL: string = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:8000'
+// Where the API lives. Set VITE_API_URL at build time to point elsewhere (e.g. a separately
+// hosted backend). Otherwise: the dev server talks to a local backend on :8000, and a
+// production build talks to its own origin (the single-container deploy serves both).
+export const API_URL: string =
+  (import.meta.env.VITE_API_URL as string | undefined) ?? (import.meta.env.DEV ? 'http://localhost:8000' : '')
 
 export class ApiError extends Error {}
 

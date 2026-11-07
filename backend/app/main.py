@@ -12,20 +12,24 @@ The SSE endpoint is async because it mostly waits, holding a connection open.
 from __future__ import annotations
 
 import json
+import uuid
 from functools import lru_cache
 from typing import Any, AsyncIterator
 
 import anyio
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile, status
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.agent.llm import LLM, GeminiLLM, LLMConfigError
 from app.agent.loop import AgentEvent, run_agent
 from app.config import settings
-from app.runs import Run, RunNotFound, RunStatus, runs
+from app.guardrails import RateLimiter, parse_limit, rate_limit
+from app.runs import Run, RunNotFound, RunStatus, TooBusy, runs
 from app.store import DatasetNotFound, InvalidDataset, store
+from app.tracing import Tracer, trace_path
 
 SSE_KEEPALIVE_S = 15.0
 SSE_RETRY_MS = 2000
@@ -37,6 +41,29 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next: Any) -> Response:
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    return response
+
+
+def _limiter(spec: str) -> RateLimiter | None:
+    parsed = parse_limit(spec)
+    return RateLimiter(*parsed) if parsed else None
+
+
+# Module-level so tests can swap them (main.limiters["runs"] = RateLimiter(...)).
+limiters: dict[str, RateLimiter | None] = {
+    "runs": _limiter(settings.rate_limit_runs),
+    "uploads": _limiter(settings.rate_limit_uploads),
+}
+limit_runs = rate_limit(lambda: limiters["runs"], "questions")
+limit_uploads = rate_limit(lambda: limiters["uploads"], "uploads")
 
 
 class DatasetOut(BaseModel):
@@ -71,7 +98,7 @@ def health() -> dict[str, Any]:
     return {"ok": True, "model": settings.model, "llm_configured": bool(settings.gemini_api_key)}
 
 
-@app.post("/datasets", status_code=status.HTTP_201_CREATED, response_model=DatasetOut)
+@app.post("/datasets", status_code=status.HTTP_201_CREATED, response_model=DatasetOut, dependencies=[Depends(limit_uploads)])
 def upload_dataset(file: UploadFile = File(...)) -> DatasetOut:
     if file.filename and not file.filename.lower().endswith(".csv"):
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Only .csv files are supported.")
@@ -94,11 +121,13 @@ def get_dataset(dataset_id: str) -> DatasetOut:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Dataset not found.") from None
 
 
-@app.post("/ask", response_model=AskOut)
+@app.post("/ask", response_model=AskOut, dependencies=[Depends(limit_runs)])
 def ask(body: AskIn, llm: LLM = Depends(get_llm)) -> AskOut:
     """Non-streaming: runs the whole agent, then returns every event. Handy for scripts and curl."""
+    run_id = f"ask-{uuid.uuid4().hex[:10]}"
+    tracer = Tracer(run_id, trace_path(settings.trace_dir, run_id) if settings.trace_dir else None)
     try:
-        return AskOut(events=list(run_agent(body.question, body.dataset_id, llm=llm)))
+        return AskOut(events=list(run_agent(body.question, body.dataset_id, llm=llm, tracer=tracer)))
     except DatasetNotFound:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Dataset not found. Upload it first.") from None
 
@@ -128,13 +157,15 @@ def _get_run(run_id: str) -> Run:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Run not found.") from None
 
 
-@app.post("/runs", status_code=status.HTTP_201_CREATED, response_model=RunOut)
+@app.post("/runs", status_code=status.HTTP_201_CREATED, response_model=RunOut, dependencies=[Depends(limit_runs)])
 def create_run(body: AskIn, llm: LLM = Depends(get_llm)) -> RunOut:
     """Start the agent in the background; watch it with GET /runs/{id}/stream."""
     try:
         run = runs.start(body.question, body.dataset_id, llm)
     except DatasetNotFound:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Dataset not found. Upload it first.") from None
+    except TooBusy as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e), headers={"Retry-After": "30"}) from None
     return _run_out(run, with_events=False)
 
 
@@ -204,3 +235,9 @@ async def stream_run(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# Single-container deploy: serve the built frontend from "/". Mounted last, so every API
+# route above takes precedence. Same origin as the API, so no CORS setup is needed.
+if settings.static_dir is not None and settings.static_dir.is_dir():
+    app.mount("/", StaticFiles(directory=settings.static_dir, html=True), name="frontend")

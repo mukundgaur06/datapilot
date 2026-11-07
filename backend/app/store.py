@@ -7,7 +7,9 @@ MongoDB/S3 without touching the tools, because tools only ever receive a DataFra
 from __future__ import annotations
 
 import io
+import threading
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,8 +67,12 @@ def _short(value: Any) -> str:
 
 
 class DatasetStore:
-    def __init__(self) -> None:
-        self._datasets: dict[str, Dataset] = {}
+    """In memory, capped: beyond `max_datasets` the least recently used upload is dropped."""
+
+    def __init__(self, max_datasets: int = 50) -> None:
+        self._datasets: OrderedDict[str, Dataset] = OrderedDict()
+        self._lock = threading.Lock()
+        self.max_datasets = max_datasets
 
     def add(self, df: pd.DataFrame, name: str = "dataset") -> str:
         if df.shape[0] == 0 or df.shape[1] == 0:
@@ -77,7 +83,10 @@ class DatasetStore:
             dupes = sorted(set(df.columns[df.columns.duplicated()]))
             raise InvalidDataset(f"Column names must be unique; duplicated: {dupes}")
         dataset_id = uuid.uuid4().hex[:12]
-        self._datasets[dataset_id] = Dataset(id=dataset_id, name=name, df=df)
+        with self._lock:
+            self._datasets[dataset_id] = Dataset(id=dataset_id, name=name, df=df)
+            while len(self._datasets) > self.max_datasets:
+                self._datasets.popitem(last=False)
         return dataset_id
 
     def load_csv(self, source: str | Path | bytes, name: str | None = None) -> str:
@@ -94,10 +103,13 @@ class DatasetStore:
         return self.add(df, name)
 
     def get(self, dataset_id: str) -> Dataset:
-        try:
-            return self._datasets[dataset_id]
-        except KeyError:
-            raise DatasetNotFound(dataset_id) from None
+        with self._lock:
+            ds = self._datasets.get(dataset_id)
+            if ds is not None:
+                self._datasets.move_to_end(dataset_id)  # recently used: keep it longest
+        if ds is None:
+            raise DatasetNotFound(dataset_id)
+        return ds
 
     def frame(self, dataset_id: str) -> pd.DataFrame:
         return self.get(dataset_id).df
@@ -123,4 +135,10 @@ class DatasetStore:
         return {"name": ds.name, "n_rows": int(df.shape[0]), "n_columns": int(df.shape[1]), "columns": columns}
 
 
-store = DatasetStore()
+def _default_store() -> DatasetStore:
+    from app.config import settings  # local import: keeps this module importable without config
+
+    return DatasetStore(max_datasets=settings.max_datasets)
+
+
+store = _default_store()

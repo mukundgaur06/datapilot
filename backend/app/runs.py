@@ -35,6 +35,10 @@ RunStatus = Literal["running", "done", "error", "cancelled"]
 _STATUS_FOR_EVENT: dict[str, RunStatus] = {"answer": "done", "error": "error", "cancelled": "cancelled"}
 
 
+class TooBusy(RuntimeError):
+    """Too many agents running at once; the caller should retry shortly."""
+
+
 class RunNotFound(KeyError):
     """No run with that id (finished long ago and evicted, or never existed)."""
 
@@ -73,8 +77,12 @@ class Run:
 
 
 class RunManager:
-    def __init__(self, store: DatasetStore = default_store, max_runs: int = 200, trace_dir: Path | None = None) -> None:
+    def __init__(
+        self, store: DatasetStore = default_store, max_runs: int = 200, trace_dir: Path | None = None,
+        max_active: int | None = None,
+    ) -> None:
         self.store = store
+        self.max_active = max_active
         self.trace_dir = trace_dir
         self.max_runs = max_runs
         self._runs: OrderedDict[str, Run] = OrderedDict()
@@ -90,6 +98,9 @@ class RunManager:
         run = Run(id=uuid.uuid4().hex[:12], dataset_id=dataset_id, question=question)
         run.tracer = Tracer(run.id, trace_path(self.trace_dir, run.id) if self.trace_dir else None)
         with self._lock:
+            active = sum(1 for r in self._runs.values() if not r.finished)
+            if self.max_active is not None and active >= self.max_active:
+                raise TooBusy(f"{active} questions are already being answered. Please try again in a minute.")
             self._runs[run.id] = run
             self._evict()
         threading.Thread(target=self._execute, args=(run, llm), name=f"run-{run.id}", daemon=True).start()
@@ -118,4 +129,4 @@ class RunManager:
             run.append(AgentEvent(type="error", step=0, data={"message": "Internal error while running the agent."}))
 
 
-runs = RunManager(trace_dir=settings.trace_dir)
+runs = RunManager(trace_dir=settings.trace_dir, max_active=settings.max_active_runs)

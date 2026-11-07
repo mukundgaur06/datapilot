@@ -1,0 +1,4 @@
+# Development and test tools, on top of the runtime dependencies.
+-r requirements.txt
+pytest>=8.0
+httpx>=0.27
