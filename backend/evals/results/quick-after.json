@@ -1,0 +1,29 @@
+{
+  "label": "quick-after",
+  "model": "gemini-3.6-flash",
+  "prompt_version": "v2",
+  "prompt_sha": "b91cf52a1134",
+  "subset": "quick",
+  "updated": "2026-11-07 08:48 UTC",
+  "summary": {
+    "cases_run": 7,
+    "cases_total": 7,
+    "success_pct": 100.0,
+    "finished_pct": 100.0,
+    "check_pass_pct": {
+      "not_text": 100.0,
+      "number": 100.0,
+      "text": 100.0
+    },
+    "number_found_pct": 100.0,
+    "grounded_pct": 100.0,
+    "avg_steps": 2,
+    "avg_tool_errors": 0,
+    "latency_p50_s": 11.91,
+    "latency_p95_s": 17.65,
+    "rate_limit_wait_s": 0.0,
+    "avg_input_tokens": 7166,
+    "avg_output_tokens": 364,
+    "total_tokens": 52708
+  }
+}

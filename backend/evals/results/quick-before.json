@@ -4,25 +4,26 @@
   "prompt_version": "v1",
   "prompt_sha": "47bc317fc0dd",
   "subset": "quick",
-  "updated": "2026-11-06 09:38 UTC",
+  "updated": "2026-11-07 08:46 UTC",
   "summary": {
-    "cases_run": 5,
+    "cases_run": 7,
     "cases_total": 7,
     "success_pct": 100.0,
     "finished_pct": 100.0,
     "check_pass_pct": {
+      "not_text": 100.0,
       "number": 100.0,
       "text": 100.0
     },
     "number_found_pct": 100.0,
     "grounded_pct": 100.0,
-    "avg_steps": 3.4,
+    "avg_steps": 3,
     "avg_tool_errors": 0,
-    "latency_p50_s": 10.54,
-    "latency_p95_s": 21.82,
+    "latency_p50_s": 11.89,
+    "latency_p95_s": 24.08,
     "rate_limit_wait_s": 80.0,
-    "avg_input_tokens": 12887,
-    "avg_output_tokens": 483,
-    "total_tokens": 66854
+    "avg_input_tokens": 11110,
+    "avg_output_tokens": 468,
+    "total_tokens": 81045
   }
 }

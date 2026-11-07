@@ -12,6 +12,8 @@ Change history (see docs/EVALS.md for the measurements):
       make_chart (group_aggregate/correlation results are already charted by the UI) or an
       unasked-for comparison. v2 says which results are auto-charted, asks the model to
       answer what was asked, and to batch independent tool calls into one turn.
+      Measured (7 cases, gemini-3.6-flash): success 7/7 -> 7/7, model calls per question
+      3.0 -> 2.0, input tokens per question 11.1k -> 7.2k.
 """
 
 from __future__ import annotations

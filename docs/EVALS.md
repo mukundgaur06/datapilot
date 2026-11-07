@@ -37,6 +37,7 @@ From `backend/`:
 
 ```
 python -m evals.run_evals --subset quick --model gemini-3.6-flash --prompt-version v1 --label quick-before
+python -m evals.run_evals --subset quick --model gemini-3.6-flash --prompt-version v2 --label quick-after
 python -m evals.run_evals --label quick-before --resume ...        # after a quota stop (the exact command is printed)
 python -m evals.run_evals --compare evals/results/quick-before.json evals/results/quick-after.json
 python -m evals.run_evals --label quick-before --subset quick --report-only   # rebuild a report, no model calls
@@ -48,9 +49,9 @@ different prompt version, so prompts can never be mixed within one run.
 
 ## Finding and change: wasted model calls (prompt v1 -> v2)
 
-**Before (prompt v1, gemini-3.6-flash, quick subset, 5 of 7 cases so far):**
-every answer was correct and grounded (100% success), but **every** case took one more model
-call than it needed (3.4 calls on average; 2 is the minimum for a one-tool question):
+**Before (prompt v1, gemini-3.6-flash, quick subset):**
+every answer was correct and grounded (7/7), but 6 of the 7 cases made model calls they
+didn't need (3.0 calls on average; 2 is the minimum for a one-tool question):
 
 | Case | Extra work the model did |
 |---|---|
@@ -58,7 +59,9 @@ call than it needed (3.4 calls on average; 2 is the minimum for a one-tool quest
 | cust-high-score | `make_chart` the user didn't ask for |
 | spam-free | an unasked-for spam vs ham breakdown |
 | cust-discount-young | an unasked-for "overall average" comparison |
-| cust-lowercase | both of the above, after correctly recovering from the lowercase column names |
+| cust-lowercase | a comparison group, a chart and another breakdown (5 calls in all) |
+| inject-rating | two extra breakdowns of the ratings |
+| cust-unanswerable | none: answered in 1 call that the data has no email column |
 
 Each extra tool call costs a whole extra model round trip, with the full conversation re-sent:
 about 3-4k more input tokens and a few seconds. Full report: `backend/evals/results/quick-before.md`.
@@ -70,18 +73,33 @@ about 3-4k more input tokens and a few seconds. Full report: `backend/evals/resu
 2. "Answer the question that was asked": no extra comparisons unless needed or requested.
 3. Request independent tool calls together in one turn instead of one per turn.
 
-**Hypothesis:** average steps drop from 3.4 toward 2 and input tokens per run fall by roughly a
-third, with no loss of success or grounding.
+**Hypothesis (written before the "after" run):** average steps drop toward 2 and input tokens
+per run fall by roughly a third, with no loss of success or grounding.
 
-**After:** pending. The free-tier quota for this model ran out after 5 of the 7 "before"
-cases on 2026-11-06. To finish (one model's daily quota covers about one 7-case run):
+**Result (same model, same 7 cases; `python -m evals.run_evals --compare ...`):**
 
-```
-# day 2: finish "before" with the ORIGINAL prompt, then start "after"
-python -m evals.run_evals --label quick-before --resume --model gemini-3.6-flash --prompt-version v1 --subset quick
-python -m evals.run_evals --label quick-after --model gemini-3.6-flash --prompt-version v2 --subset quick
-# if "after" stops on quota, resume it the next day with the command it prints, then:
-python -m evals.run_evals --compare evals/results/quick-before.json evals/results/quick-after.json
-```
+| Metric | Before (v1) | After (v2) | Change |
+|---|---|---|---|
+| Task success | 7/7 (100%) | 7/7 (100%) | no change |
+| Expected numbers found and grounded in a tool result | 100% | 100% | no change |
+| Avg model calls per question | 3.0 | 2.0 | **−33%** |
+| Avg input tokens per question | 11,110 | 7,166 | **−35%** |
+| Avg output tokens per question | 468 | 364 | −22% |
+| Latency p50 / p95 (excl. rate-limit waits) | 11.9s / 24.1s | 11.9s / 17.7s | p95 −27% |
 
-The before/after table goes here once both runs are complete.
+Per case, v2 took exactly 2 calls everywhere. The biggest saving was cust-lowercase (5 calls,
+22.5k input tokens down to 2 calls, 7.7k). The one case that got more expensive was
+cust-unanswerable: 1 call before, 2 after, because v2 first checked the dataset profile
+before saying there is no email column. That's a defensible check, but it is an extra call.
+
+**Verdict:** the hypothesis held. v2 answers the same questions just as correctly with a third
+fewer model calls and about 35% fewer input tokens, so it ships as the default prompt
+(`LATEST = "v2"`). Set `DATAPILOT_PROMPT_VERSION=v1` to go back.
+
+**Limits of this measurement:** 7 questions on one model (gemini-3.6-flash), one run each, so
+the success rate can't distinguish small differences (one case = 14 points). The efficiency
+gain is consistent across cases, which makes it more trustworthy than the sample size alone
+suggests. "Before" ran over two days because of the free-tier quota (cases 1-5 on 2026-11-06,
+6-7 on 2026-11-07); same model and same prompt throughout, which the harness enforces.
+Latencies for two "before" cases were corrected for rate-limit waits using the run log (noted
+in those records). Reports: `backend/evals/results/quick-before.md`, `quick-after.md`.
