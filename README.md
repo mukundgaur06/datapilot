@@ -5,6 +5,11 @@ an LLM agent answers it by calling real pandas and scikit-learn tools, step by s
 your browser. Every number in an answer comes from a tool result, never from the model's
 imagination.
 
+**Live demo: [datapilot-pjp6.onrender.com](https://datapilot-pjp6.onrender.com)**. Upload one of the
+CSVs in [sample_data/](sample_data/) or your own. It runs on free tiers: the first visit after
+a quiet spell takes about a minute to wake the server, and the shared Gemini quota allows only
+a handful of questions a day, so it may reply "daily quota used up" until the next day.
+
 ![DataPilot training a spam detector: the agent's tool calls on the left, the model card with cross-validated metrics, confusion matrix and caveats on the right](docs/images/model.png)
 
 *Asked "Build a spam detector and tell me what drives it", DataPilot trains a cross-validated
@@ -138,7 +143,7 @@ Set in `backend/.env` or as environment variables. All optional except the key.
 | `DATAPILOT_TRACING` / `DATAPILOT_TRACE_DIR` | on / `backend/traces` | Per-run JSONL traces. |
 | `DATAPILOT_CORS_ORIGINS` | `http://localhost:5173` | Allowed browser origins when the UI is served separately. |
 
-Deploying: see [docs/DEPLOY.md](docs/DEPLOY.md).
+Deploying: see [docs/DEPLOY.md](docs/DEPLOY.md). The live demo runs this same image on Render.
 
 ## Security and guardrails
 
